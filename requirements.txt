@@ -1,0 +1,31 @@
+# ICU Patient Biosignal Simulator - Dependencies
+# Install with: pip install -r requirements.txt
+
+# Signal Simulation
+neurokit2>=0.2.7
+numpy>=1.24.0
+scipy>=1.11.0
+
+# API Framework
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+sse-starlette>=2.1.0
+
+# Encryption & Security
+cryptography>=42.0.0
+python-dotenv>=1.0.0
+
+# Async Database
+aiosqlite>=0.20.0
+
+# Report Generation
+matplotlib>=3.8.0
+jinja2>=3.1.0
+
+# HTTP Client (for test tool)
+httpx>=0.27.0
+requests>=2.31.0
+
+# Rich terminal output (for dashboard/testing)
+rich>=13.7.0
+click>=8.1.0
