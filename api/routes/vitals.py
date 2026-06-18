@@ -8,6 +8,7 @@ import time
 import asyncio
 import json
 import logging
+from typing import Optional
 from fastapi import APIRouter, Depends
 from sse_starlette.sse import EventSourceResponse
 
@@ -146,3 +147,18 @@ async def stream_vitals(x_api_key: str = Depends(verify_api_key)):
             await asyncio.sleep(1.0)
 
     return EventSourceResponse(event_generator())
+
+
+@router.post(
+    "/anomaly",
+    dependencies=[Depends(verify_api_key)],
+    summary="Force trigger a patient anomaly / episode",
+)
+async def trigger_anomaly(state: Optional[str] = None):
+    """
+    Force triggers an arrhythmia or vital sign anomaly.
+    If `state` is not specified or set to "random", a random episode is chosen.
+    """
+    engine = get_engine()
+    result = engine.trigger_anomaly(state_name=state)
+    return encrypted_response(result)

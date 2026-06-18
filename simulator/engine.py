@@ -137,6 +137,21 @@ class SimulatorEngine:
             "episode_history_count": len(self.state_machine.episode_history),
         }
 
+    def trigger_anomaly(self, state_name: Optional[str] = None) -> dict:
+        """Trigger an anomaly on the patient state machine."""
+        with self._lock:
+            episode = self.state_machine.trigger_anomaly(state_name)
+            # Immediately update vitals snapshot so the API reflects it
+            vitals = self.vitals_engine.update(0.0)
+            self._latest_vitals = dict(vitals)
+            return {
+                "triggered": True,
+                "state": episode.state.value,
+                "label": episode.label,
+                "duration_s": round(episode.duration_s, 1),
+                "severity": episode.severity,
+            }
+
     # ------------------------------------------------------------------
     # Internal Loop
     # ------------------------------------------------------------------
@@ -183,7 +198,7 @@ class SimulatorEngine:
             irregularity=irregularity,
         )
         ppg = generate_ppg_segment(hr=hr, duration_s=SEGMENT_DURATION_S,
-                                   sr=SAMPLING_RATE, profile=self.profile, rr=rr)
+                                   sr=SAMPLING_RATE, profile=self.profile, rr=rr, state=state)
         rsp = generate_rsp_segment(rr=rr, duration_s=SEGMENT_DURATION_S,
                                    sr=SAMPLING_RATE, profile=self.profile)
 

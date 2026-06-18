@@ -8,12 +8,17 @@ Your monitoring system connects to these endpoints to get live data.
 
 import os
 import time
+import json
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
+from sse_starlette.sse import EventSourceResponse
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -155,12 +160,78 @@ async def patient_info():
         return JSONResponse(status_code=503, content={"status": "starting_up"})
 
 
+class AnomalyRequest(BaseModel):
+    state: str
+
+# ─────────────────────────────────────────────────────────
+# Dashboard Endpoints (unencrypted for local UI)
+# ─────────────────────────────────────────────────────────
+@app.get("/dashboard", response_class=HTMLResponse, tags=["Dashboard"], summary="Live bedside monitor dashboard")
+async def dashboard():
+    """Serves the unencrypted bedside clinical monitor HTML dashboard."""
+    html_path = Path(__file__).parent / "templates" / "dashboard.html"
+    if not html_path.exists():
+        return HTMLResponse("<h2>Dashboard Template Not Found</h2>", status_code=404)
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+
+
+@app.get("/dashboard/api/stream", tags=["Dashboard"], summary="Unencrypted vital signs SSE stream")
+async def dashboard_stream():
+    """Streams live vital signs unencrypted for the browser dashboard."""
+    engine = get_engine()
+    async def event_generator():
+        while True:
+            try:
+                vitals = engine.get_latest_vitals()
+                if vitals:
+                    yield {
+                        "event": "vitals",
+                        "data": json.dumps(vitals)
+                    }
+            except Exception as exc:
+                yield {"event": "error", "data": json.dumps({"error": str(exc)})}
+            await asyncio.sleep(1.0)
+    return EventSourceResponse(event_generator())
+
+
+@app.get("/dashboard/api/waveforms", tags=["Dashboard"], summary="Unencrypted waveform data")
+async def dashboard_waveforms(seconds: int = 5):
+    """Returns unencrypted waveform segments for charting in the browser."""
+    seconds = min(seconds, 30)
+    engine = get_engine()
+    return {
+        "sampling_rate_hz": 250,
+        "ecg": engine.get_ecg_waveform(seconds=seconds),
+        "ppg": engine.get_ppg_waveform(seconds=seconds),
+        "rsp": engine.get_rsp_waveform(seconds=seconds),
+    }
+
+
+@app.post("/dashboard/api/anomaly", tags=["Dashboard"], summary="Unencrypted anomaly injector trigger")
+async def dashboard_trigger_anomaly(req: AnomalyRequest):
+    """Force-injects a patient anomaly/arrhythmia state from the dashboard."""
+    engine = get_engine()
+    state_val = req.state if req.state != "random" else None
+    
+    # Restores stable state if 'stable' or 'normal' is passed
+    if state_val in ("stable", "normal"):
+        with engine._lock:
+            engine.state_machine.current_episode = None
+            vitals = engine.vitals_engine.update(0.0)
+            engine._latest_vitals = dict(vitals)
+        return {"triggered": True, "state": "stable", "label": "Normal sinus rhythm restored"}
+        
+    result = engine.trigger_anomaly(state_name=state_val)
+    return result
+
+
 @app.get("/", tags=["System"])
 async def root():
     return {
         "name": "ICU Biosignal Simulator",
         "version": "1.0.0",
         "docs": "/docs",
+        "dashboard": "/dashboard",
         "health": "/api/v1/health",
         "patient": "/api/v1/patient",
     }

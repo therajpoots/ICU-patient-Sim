@@ -85,6 +85,8 @@ def generate_ecg_segment(hr: float, duration_s: float, sr: int = SAMPLING_RATE,
         rhythm = "tachycardia"
     elif state == PatientState.BRADYCARDIA:
         rhythm = "bradycardia"
+    elif state == PatientState.VFIB:
+        rhythm = "vfib"
 
     try:
         config = bss.ECGConfig(
@@ -115,29 +117,34 @@ def generate_ecg_segment(hr: float, duration_s: float, sr: int = SAMPLING_RATE,
 
 def generate_ppg_segment(hr: float, duration_s: float, sr: int = SAMPLING_RATE,
                           profile: Optional[PatientProfile] = None,
-                          rr: Optional[float] = None) -> np.ndarray:
+                          rr: Optional[float] = None,
+                          state: PatientState = PatientState.STABLE) -> np.ndarray:
     """Generates a PPG (photoplethysmogram) waveform segment using biosignal-simulator."""
     if profile is None:
         profile = PatientProfile()
     
-    # Couple respiration rate if provided, otherwise default to baseline (typically ~15-16 bpm)
-    if rr is None:
-        rr = profile.rr_baseline
-    
-    try:
-        config = bss.PPGConfig(
-            fs=float(sr),
-            duration_s=duration_s,
-            heart_rate=hr,
-            resp_rate=rr / 60.0,
-            resp_modulation=0.15,
-        )
-        generator = bss.PPGGenerator(config)
-        ppg = generator.generate()
-    except Exception as exc:
-        logger.warning(f"Error in biosignal_simulator PPGGenerator: {exc}. Falling back to simple simulator.")
-        t = np.arange(int(duration_s * sr)) / sr
-        ppg = np.sin(2 * np.pi * (hr / 60.0) * t) ** 2
+    # In Ventricular Fibrillation, cardiac output drops to zero, causing the pulse to vanish (flatline)
+    if state == PatientState.VFIB:
+        ppg = np.zeros(int(duration_s * sr))
+    else:
+        # Couple respiration rate if provided, otherwise default to baseline (typically ~15-16 bpm)
+        if rr is None:
+            rr = profile.rr_baseline
+        
+        try:
+            config = bss.PPGConfig(
+                fs=float(sr),
+                duration_s=duration_s,
+                heart_rate=hr,
+                resp_rate=rr / 60.0,
+                resp_modulation=0.15,
+            )
+            generator = bss.PPGGenerator(config)
+            ppg = generator.generate()
+        except Exception as exc:
+            logger.warning(f"Error in biosignal_simulator PPGGenerator: {exc}. Falling back to simple simulator.")
+            t = np.arange(int(duration_s * sr)) / sr
+            ppg = np.sin(2 * np.pi * (hr / 60.0) * t) ** 2
 
     ppg = _add_baseline_wander(ppg, sr, freq=0.08, amp=0.08)
     ppg = _add_gaussian_noise(ppg, sigma=profile.ppg_noise_amplitude)
@@ -217,10 +224,10 @@ class VitalsEngine:
                 p.hr_min, p.hr_max, dt)
             self._sbp = self._random_walk(
                 self._sbp, p.sbp_baseline, p.sbp_variability,
-                85, 160, dt)
+                p.sbp_baseline - 15, p.sbp_baseline + 15, dt)
             self._dbp = self._random_walk(
                 self._dbp, p.dbp_baseline, p.dbp_variability,
-                50, 100, dt)
+                p.dbp_baseline - 10, p.dbp_baseline + 10, dt)
             self._rr = self._random_walk(
                 self._rr, p.rr_baseline, p.rr_variability,
                 p.rr_min, p.rr_max, dt)
@@ -231,10 +238,22 @@ class VitalsEngine:
             # Apply state modifiers (with ramp scaling)
             hr = float(np.clip(self._hr + mods["hr_delta"],
                                30, 200))
-            sbp = float(np.clip(self._sbp + mods["sbp_delta"],
-                                70, 220))
-            dbp = float(np.clip(self._dbp + mods["dbp_delta"],
-                                40, 130))
+            
+            # If in VFib, allow blood pressure to drop to near-zero (shock)
+            min_sbp = 20 if state == PatientState.VFIB else 70
+            min_dbp = 10 if state == PatientState.VFIB else 40
+            min_spo2 = 10 if state == PatientState.VFIB else 82
+
+            if state == PatientState.VFIB:
+                # Interpolate between current baseline and shock floor based on ramp
+                sbp_target = 25.0
+                dbp_target = 15.0
+                sbp = float(np.clip((1.0 - ramp) * self._sbp + ramp * sbp_target, min_sbp, 220))
+                dbp = float(np.clip((1.0 - ramp) * self._dbp + ramp * dbp_target, min_dbp, 130))
+            else:
+                sbp = float(np.clip(self._sbp + mods["sbp_delta"], min_sbp, 220))
+                dbp = float(np.clip(self._dbp + mods["dbp_delta"], min_dbp, 130))
+
             rr = float(np.clip(self._rr + mods["rr_delta"],
                                6, 40))
 
@@ -242,7 +261,7 @@ class VitalsEngine:
             rr_spo2_coupling = -max(0, (rr - p.rr_baseline) * 0.12)
             spo2 = float(np.clip(
                 self._spo2 + mods["spo2_delta"] + rr_spo2_coupling,
-                82, 100))
+                min_spo2, 100))
 
             # MAP (mean arterial pressure)
             map_val = dbp + (sbp - dbp) / 3.0

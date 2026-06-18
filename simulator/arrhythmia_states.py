@@ -28,6 +28,7 @@ class PatientState(str, Enum):
     DESATURATION  = "spo2_desaturation"
     HYPERTENSIVE  = "hypertensive_spike"
     RESP_DISTRESS = "respiratory_distress"
+    VFIB          = "ventricular_fibrillation"
 
 
 @dataclass
@@ -70,6 +71,7 @@ EPISODE_TYPES = [
     (PatientState.DESATURATION,  30,   180, 2.5, "mild"),
     (PatientState.HYPERTENSIVE,  60,   300, 1.5, "moderate"),
     (PatientState.RESP_DISTRESS, 60,   240, 1.0, "mild"),
+    (PatientState.VFIB,          30,    90, 0.5, "severe"),
 ]
 
 EPISODE_LABELS = {
@@ -80,6 +82,7 @@ EPISODE_LABELS = {
     PatientState.DESATURATION:  "SpO₂ Desaturation",
     PatientState.HYPERTENSIVE:  "Hypertensive Spike",
     PatientState.RESP_DISTRESS: "Respiratory Distress",
+    PatientState.VFIB:          "Ventricular Fibrillation",
 }
 
 
@@ -165,7 +168,8 @@ class ArrhythmiaStateMachine:
             )
 
         if self.current_episode is not None:
-            ramp = self.current_episode.ramp_factor()
+            ramp_seconds = 2.0 if self.current_episode.state == PatientState.VFIB else 12.0
+            ramp = self.current_episode.ramp_factor(ramp_seconds=ramp_seconds)
             return self.current_episode.state, self.current_episode, ramp
 
         return PatientState.STABLE, None, 0.0
@@ -238,6 +242,13 @@ class ArrhythmiaStateMachine:
                 "spo2_delta": -4.0,
                 "rr_delta":   +6.0,
             },
+            PatientState.VFIB: {
+                "hr_delta":   +110.0,
+                "sbp_delta":  -85.0,
+                "dbp_delta":  -55.0,
+                "spo2_delta": -18.0,
+                "rr_delta":   -6.0,
+            },
         }
 
         chosen = mods.get(state, {})
@@ -245,6 +256,40 @@ class ArrhythmiaStateMachine:
             base[key] = val * ramp
 
         return base
+
+    def trigger_anomaly(self, state_name: Optional[str] = None) -> Episode:
+        """Force trigger a specific or random anomaly episode."""
+        if state_name and state_name != "random":
+            duration = random.uniform(60, 180)
+            severity = "moderate"
+            for s, mn, mx, w, sv in EPISODE_TYPES:
+                if s.value == state_name or s == state_name:
+                    duration = random.uniform(mn, mx)
+                    severity = sv
+                    break
+            
+            try:
+                state = PatientState(state_name)
+            except ValueError:
+                state = PatientState.PVC
+                
+            episode = Episode(
+                state=state,
+                start_time=time.time(),
+                duration_s=duration,
+                label=EPISODE_LABELS.get(state, "Custom Anomaly"),
+                severity=severity,
+            )
+        else:
+            episode = self._pick_episode()
+            
+        self.current_episode = episode
+        logger.warning(
+            f"FORCED Episode starting: {self.current_episode.label} "
+            f"(planned duration: {self.current_episode.duration_s:.0f}s, "
+            f"severity: {self.current_episode.severity})"
+        )
+        return episode
 
     @property
     def seconds_until_next(self) -> float:
