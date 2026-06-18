@@ -1,6 +1,6 @@
 """
 Vitals & Signal Generator
-Produces realistic ECG, PPG, Respiratory waveforms using NeuroKit2,
+Produces realistic ECG, PPG, Respiratory waveforms using biosignal-simulator,
 plus computed SpO2, HR, Blood Pressure with ICU-grade noise layering.
 """
 
@@ -13,7 +13,7 @@ from collections import deque
 from typing import Optional, Dict, Any
 
 import numpy as np
-import neurokit2 as nk
+import biosignal_simulator as bss
 
 from simulator.patient_profile import PatientProfile
 from simulator.arrhythmia_states import PatientState, ArrhythmiaStateMachine
@@ -68,49 +68,39 @@ def generate_ecg_segment(hr: float, duration_s: float, sr: int = SAMPLING_RATE,
                           pvc_burden: float = 0.0,
                           irregularity: float = 0.0) -> np.ndarray:
     """
-    Generates a single ECG waveform segment with:
-    - Realistic ECGSYN model
-    - State-specific morphology modifications
-    - Full noise + baseline wander layering
+    Generates a single ECG waveform segment using biosignal-simulator.
+    - Maps states to biosignal-simulator rhythm types.
+    - Applies custom noise layering.
     """
     if profile is None:
         profile = PatientProfile()
 
-    # AFib: irregular RR
-    if irregularity > 0.5:
-        # Simulate AFib with high HR variability + no clear P waves
-        hr_sigma = hr * 0.25 * irregularity
-        try:
-            ecg = nk.ecg_simulate(
-                duration=duration_s,
-                sampling_rate=sr,
-                heart_rate=hr,
-                heart_rate_std=max(5, hr_sigma),
-                method="ecgsyn",
-                noise=0.0,
-            )
-        except Exception:
-            ecg = nk.ecg_simulate(duration=duration_s, sampling_rate=sr,
-                                  heart_rate=hr, noise=0.0)
-        # Suppress P-waves by adding interference at characteristic P-wave timing
-        ecg = ecg * 0.95  # slight amplitude reduction
-    else:
-        try:
-            ecg = nk.ecg_simulate(
-                duration=duration_s,
-                sampling_rate=sr,
-                heart_rate=hr,
-                heart_rate_std=max(2, 4 * (1 + pvc_burden)),
-                method="ecgsyn",
-                noise=0.0,
-            )
-        except Exception:
-            ecg = nk.ecg_simulate(duration=duration_s, sampling_rate=sr,
-                                  heart_rate=hr, noise=0.0)
+    # Map state & metrics to rhythm_type
+    rhythm = "normal"
+    if irregularity > 0.5 or state == PatientState.AFIB:
+        rhythm = "afib"
+    elif pvc_burden > 0.01 or state == PatientState.PVC:
+        rhythm = "pvc"
+    elif state == PatientState.TACHYCARDIA:
+        rhythm = "tachycardia"
+    elif state == PatientState.BRADYCARDIA:
+        rhythm = "bradycardia"
 
-    # Inject PVC morphology: wide, bizarre QRS at pvc_burden fraction of beats
-    if pvc_burden > 0.01:
-        ecg = _inject_pvcs(ecg, sr, hr, pvc_burden)
+    try:
+        config = bss.ECGConfig(
+            fs=float(sr),
+            duration_s=duration_s,
+            heart_rate=hr,
+            rhythm_type=rhythm,
+            lead_type="single",
+            lead_name="II",
+        )
+        generator = bss.ECGGenerator(config)
+        ecg = generator.generate()
+    except Exception as exc:
+        logger.warning(f"Error in biosignal_simulator ECGGenerator: {exc}. Falling back to simple simulator.")
+        t = np.arange(int(duration_s * sr)) / sr
+        ecg = np.sin(2 * np.pi * (hr / 60.0) * t)
 
     # --- Noise layers ---
     ecg = _add_baseline_wander(ecg, sr,
@@ -123,42 +113,31 @@ def generate_ecg_segment(hr: float, duration_s: float, sr: int = SAMPLING_RATE,
     return ecg.astype(np.float32)
 
 
-def _inject_pvcs(ecg: np.ndarray, sr: int, hr: float, burden: float) -> np.ndarray:
-    """Inject wide QRS complexes at random beat positions to simulate PVCs."""
-    out = ecg.copy()
-    beat_interval = int(60 / hr * sr)
-    n_beats = len(ecg) // beat_interval
-    pvc_indices = random.sample(range(n_beats),
-                                k=max(0, int(n_beats * burden)))
-    for bi in pvc_indices:
-        center = bi * beat_interval + beat_interval // 2
-        width = int(sr * 0.16)  # ~160ms wide QRS
-        start = max(0, center - width // 2)
-        end = min(len(out), start + width)
-        # Wide bizarre QRS: large amplitude, slow slurred
-        t = np.linspace(-np.pi, np.pi, end - start)
-        pvc_wave = 1.8 * np.sin(t * 0.6) * np.exp(-0.5 * (t / 1.2) ** 2)
-        out[start:end] += pvc_wave
-    return out
-
-
 def generate_ppg_segment(hr: float, duration_s: float, sr: int = SAMPLING_RATE,
-                          profile: Optional[PatientProfile] = None) -> np.ndarray:
-    """Generates a PPG (photoplethysmogram) waveform segment."""
+                          profile: Optional[PatientProfile] = None,
+                          rr: Optional[float] = None) -> np.ndarray:
+    """Generates a PPG (photoplethysmogram) waveform segment using biosignal-simulator."""
     if profile is None:
         profile = PatientProfile()
+    
+    # Couple respiration rate if provided, otherwise default to baseline (typically ~15-16 bpm)
+    if rr is None:
+        rr = profile.rr_baseline
+    
     try:
-        ppg = nk.ppg_simulate(
-            duration=duration_s,
-            sampling_rate=sr,
+        config = bss.PPGConfig(
+            fs=float(sr),
+            duration_s=duration_s,
             heart_rate=hr,
-            frequency_modulation=0.15,
-            ibi_randomness=0.1,
+            resp_rate=rr / 60.0,
+            resp_modulation=0.15,
         )
-    except Exception:
-        # Fallback: simple sinusoidal PPG approximation
+        generator = bss.PPGGenerator(config)
+        ppg = generator.generate()
+    except Exception as exc:
+        logger.warning(f"Error in biosignal_simulator PPGGenerator: {exc}. Falling back to simple simulator.")
         t = np.arange(int(duration_s * sr)) / sr
-        ppg = np.sin(2 * np.pi * (hr / 60) * t) ** 2
+        ppg = np.sin(2 * np.pi * (hr / 60.0) * t) ** 2
 
     ppg = _add_baseline_wander(ppg, sr, freq=0.08, amp=0.08)
     ppg = _add_gaussian_noise(ppg, sigma=profile.ppg_noise_amplitude)
@@ -168,24 +147,27 @@ def generate_ppg_segment(hr: float, duration_s: float, sr: int = SAMPLING_RATE,
 
 def generate_rsp_segment(rr: float, duration_s: float, sr: int = SAMPLING_RATE,
                           profile: Optional[PatientProfile] = None) -> np.ndarray:
-    """Generates a respiratory (RSP) waveform segment."""
+    """Generates a respiratory (RSP) waveform segment using biosignal-simulator."""
     if profile is None:
         profile = PatientProfile()
     try:
-        rsp = nk.rsp_simulate(
-            duration=duration_s,
-            sampling_rate=sr,
-            respiratory_rate=rr,
-            method="sinusoidal",
-            noise=0.0,
+        config = bss.RespConfig(
+            fs=float(sr),
+            duration_s=duration_s,
+            resp_rate_hz=rr / 60.0,
+            amplitude=1.0,
         )
-    except Exception:
+        generator = bss.RespGenerator(config)
+        rsp = generator.generate()
+    except Exception as exc:
+        logger.warning(f"Error in biosignal_simulator RespGenerator: {exc}. Falling back to simple simulator.")
         t = np.arange(int(duration_s * sr)) / sr
-        rsp = np.sin(2 * np.pi * (rr / 60) * t)
+        rsp = np.sin(2 * np.pi * (rr / 60.0) * t)
 
     rsp = _add_baseline_wander(rsp, sr, freq=0.04, amp=0.06)
     rsp = _add_gaussian_noise(rsp, sigma=profile.rsp_noise_amplitude)
     return rsp.astype(np.float32)
+
 
 
 class VitalsEngine:

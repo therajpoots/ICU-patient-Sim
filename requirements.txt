@@ -2,7 +2,7 @@
 # Install with: pip install -r requirements.txt
 
 # Signal Simulation
-neurokit2>=0.2.7
+biosignal-simulator>=0.1.3
 numpy>=1.24.0
 scipy>=1.11.0
 

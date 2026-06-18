@@ -183,7 +183,7 @@ class SimulatorEngine:
             irregularity=irregularity,
         )
         ppg = generate_ppg_segment(hr=hr, duration_s=SEGMENT_DURATION_S,
-                                   sr=SAMPLING_RATE, profile=self.profile)
+                                   sr=SAMPLING_RATE, profile=self.profile, rr=rr)
         rsp = generate_rsp_segment(rr=rr, duration_s=SEGMENT_DURATION_S,
                                    sr=SAMPLING_RATE, profile=self.profile)
 

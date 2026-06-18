@@ -10,7 +10,7 @@ The simulator generates continuous, physiologically realistic signals for a sing
 
 | Signal | Type | Rate | Notes |
 |--------|------|------|-------|
-| **ECG** | Waveform | 250 Hz | Single lead (Lead-II equivalent), ECGSYN model |
+| **ECG** | Waveform | 250 Hz | Single lead (Lead-II equivalent), Projected 3D VCG model |
 | **PPG** | Waveform | 250 Hz | Photoplethysmogram |
 | **Respiratory** | Waveform | 250 Hz | Chest/airflow signal |
 | **Heart Rate** | Derived | 1 Hz | Extracted from ECG R-peaks |
@@ -479,4 +479,4 @@ SIM_SPEED=2.0
 pip install -r requirements.txt
 ```
 
-Key libraries: `neurokit2`, `fastapi`, `uvicorn`, `cryptography`, `sse-starlette`, `numpy`, `scipy`
+Key libraries: `biosignal-simulator`, `fastapi`, `uvicorn`, `cryptography`, `sse-starlette`, `numpy`, `scipy`
