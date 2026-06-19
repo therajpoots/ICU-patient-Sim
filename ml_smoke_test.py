@@ -59,7 +59,7 @@ def test_feature_extraction():
     )
     
     assert isinstance(features, dict), "extract_features_from_window did not return a dict"
-    assert len(features) == 20, f"Expected 20 features, got {len(features)}"
+    assert len(features) >= 35, f"Expected at least 35 features, got {len(features)}"
     expected_keys = [
         "ecg_qrs_duration", "ecg_st_elevation",
         "hrv_sdnn", "hrv_rmssd", "hrv_pnn50",
@@ -67,11 +67,12 @@ def test_feature_extraction():
         "sbp_mean", "sbp_var", "sbp_slope",
         "dbp_mean", "dbp_var", "dbp_slope",
         "spo2_mean", "spo2_var", "spo2_slope",
-        "hr_mean", "hr_var", "hr_slope"
+        "hr_mean", "hr_var", "hr_slope",
+        "temp_core", "temp_skin", "ppg_ptt"
     ]
     for key in expected_keys:
         assert key in features, f"Feature key '{key}' missing"
-        assert isinstance(features[key], float), f"Feature '{key}' is not a float"
+        assert isinstance(features[key], (float, int)), f"Feature '{key}' is not a float or int"
     print("  Feature extraction keys and types OK")
 
 def test_models():
@@ -98,20 +99,19 @@ def test_models():
 
 def test_train_pipeline_end_to_end():
     print("\nTesting Training Pipeline end-to-end (fast dummy run)...")
-    # Run a very short simulation: 9 seconds per state -> 3 samples per state
-    # 9 states * 3 samples = 27 samples total.
-    # Output saved to the temp/current directory.
-    temp_plot = "xai_tree_plot.png"
-    if os.path.exists(temp_plot):
-        os.remove(temp_plot)
-        
-    df_metrics = run_ml_pipeline(duration_per_state=15, output_dir=".")
+    temp_dir = "data/smoke_test_tmp"
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_plot = os.path.join(temp_dir, "xai_tree_plot.png")
     
-    assert os.path.exists(temp_plot), "xAI decision tree plot was not created"
+    df_metrics = run_ml_pipeline(duration_per_state=15, output_dir=temp_dir)
+    
+    assert os.path.exists(temp_plot), "xAI decision tree plot was not created in temp dir"
     assert df_metrics is not None, "Metrics dataframe was not returned"
     
-    # Cleanup plot
-    os.remove(temp_plot)
+    # Cleanup temp directory
+    import shutil
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
     print("  End-to-end training pipeline OK")
 
 def main():

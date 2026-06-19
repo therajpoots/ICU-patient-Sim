@@ -33,13 +33,13 @@ def notch_filter(data: np.ndarray, notch_freq: float, fs: float, Q: float = 30.0
     return signal.filtfilt(b, a, data)
 
 def clean_ecg(ecg: np.ndarray, fs: float = 250.0) -> np.ndarray:
-    """Filters raw ECG using a bandpass filter (0.5-40 Hz) and 50Hz notch filter."""
+    """Filters raw ECG using a bandpass filter (0.5-35 Hz) and 50Hz notch filter."""
     # 1. Detrend to remove general DC offset
     detrended = signal.detrend(ecg)
     # 2. Apply notch filter to remove 50Hz powerline interference
     notched = notch_filter(detrended, 50.0, fs)
-    # 3. Apply bandpass filter to capture QRS (0.5-40 Hz)
-    cleaned = butter_bandpass_filter(notched, 0.5, 40.0, fs)
+    # 3. Apply bandpass filter to capture QRS (0.5-35 Hz) with order=3 for sharper cutoff
+    cleaned = butter_bandpass_filter(notched, 0.5, 35.0, fs, order=3)
     return cleaned
 
 def clean_ppg(ppg: np.ndarray, fs: float = 250.0) -> np.ndarray:
@@ -86,7 +86,7 @@ def pan_tompkins_qrs_detector(ecg: np.ndarray, fs: float = 250.0) -> np.ndarray:
     
     # We find peaks in the moving integration window
     # Prominence threshold prevents triggering on low amplitude noise
-    prominence = 0.01 if np.max(mwi) < 1e-5 else 0.08 * np.max(mwi)
+    prominence = 0.01 if np.max(mwi) < 1e-5 else 0.35 * np.max(mwi)
     mwi_peaks, _ = signal.find_peaks(mwi, distance=min_dist, prominence=prominence)
 
     # Map MWI peaks back to local maximum in bandpass-filtered ECG (within a 100 ms search window)

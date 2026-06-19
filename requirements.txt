@@ -29,3 +29,8 @@ requests>=2.31.0
 # Rich terminal output (for dashboard/testing)
 rich>=13.7.0
 click>=8.1.0
+
+# Desktop GUI, MCP Server, and LLM Integration
+PyQt6>=6.6.0
+mcp>=1.0.0
+openai>=1.12.0

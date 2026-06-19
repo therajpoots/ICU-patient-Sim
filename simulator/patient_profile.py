@@ -46,12 +46,18 @@ class PatientProfile:
     spo2_min: float = 92.0             # acceptable floor (before alert)
     spo2_variability: float = 0.5      # ± % SD per minute
 
+    # Temperature baselines (°C)
+    temp_core_baseline: float = 37.0
+    temp_skin_baseline: float = 35.5
+    temp_core_variability: float = 0.05
+    temp_skin_variability: float = 0.07
+
     # Signal noise characteristics (realistic Holter-like)
-    ecg_noise_amplitude: float = 0.04       # μV equivalent
+    ecg_noise_amplitude: float = 0.02       # μV equivalent
     ecg_baseline_wander_hz: float = 0.1     # Hz of slow drift
-    ecg_baseline_wander_amp: float = 0.12   # amplitude of drift
-    ppg_noise_amplitude: float = 0.03
-    rsp_noise_amplitude: float = 0.05
+    ecg_baseline_wander_amp: float = 0.08   # amplitude of drift
+    ppg_noise_amplitude: float = 0.015
+    rsp_noise_amplitude: float = 0.03
 
     # Comorbidities (affect simulation behaviour)
     has_hypertension: bool = True       # elevates BP baseline slightly

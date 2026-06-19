@@ -188,6 +188,7 @@ class SimulatorEngine:
         state = PatientState(vitals["patient_state"])
 
         # 2. Generate waveform segments
+        t_start = float(self._tick_count * SEGMENT_DURATION_S)
         ecg = generate_ecg_segment(
             hr=hr,
             duration_s=SEGMENT_DURATION_S,
@@ -195,12 +196,29 @@ class SimulatorEngine:
             profile=self.profile,
             state=state,
             pvc_burden=pvc_burden,
+            pac_burden=vitals.get("pac_burden", 0.0),
             irregularity=irregularity,
+            st_delta=vitals.get("st_delta", 0.0),
+            t_start=t_start,
         )
-        ppg = generate_ppg_segment(hr=hr, duration_s=SEGMENT_DURATION_S,
-                                   sr=SAMPLING_RATE, profile=self.profile, rr=rr, state=state)
-        rsp = generate_rsp_segment(rr=rr, duration_s=SEGMENT_DURATION_S,
-                                   sr=SAMPLING_RATE, profile=self.profile)
+        ppg = generate_ppg_segment(
+            hr=hr, 
+            duration_s=SEGMENT_DURATION_S, 
+            sr=SAMPLING_RATE, 
+            profile=self.profile, 
+            rr=rr, 
+            state=state,
+            ppg_amplitude_factor=vitals.get("ppg_amplitude_factor", 1.0),
+            t_start=t_start,
+        )
+        rsp = generate_rsp_segment(
+            rr=rr, 
+            duration_s=SEGMENT_DURATION_S, 
+            sr=SAMPLING_RATE, 
+            profile=self.profile,
+            ie_ratio=vitals.get("ie_ratio_factor", 1.5),
+            t_start=t_start,
+        )
 
         # 3. Update buffers
         with self._lock:

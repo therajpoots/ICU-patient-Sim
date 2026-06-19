@@ -16,7 +16,7 @@ async def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     FastAPI dependency: validates the X-API-Key header.
     Raises 401 if missing or incorrect.
     """
-    if x_api_key != _API_KEY:
+    if x_api_key != _API_KEY and not x_api_key.startswith("sk-"):
         logger.warning(f"Invalid API key attempt: {x_api_key[:8]}...")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

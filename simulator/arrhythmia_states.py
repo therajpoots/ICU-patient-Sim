@@ -22,12 +22,20 @@ ARRHYTHMIA_MEAN_INTERVAL_S = float(os.getenv("ARRHYTHMIA_MEAN_INTERVAL_S", "9000
 class PatientState(str, Enum):
     STABLE        = "stable"
     PVC           = "pvc"               # Premature ventricular contractions
+    PAC           = "pac"               # Premature atrial contractions
     TACHYCARDIA   = "sinus_tachycardia"
     BRADYCARDIA   = "sinus_bradycardia"
     AFIB          = "atrial_fibrillation"
+    AFLUTTER      = "atrial_flutter"
     DESATURATION  = "spo2_desaturation"
     HYPERTENSIVE  = "hypertensive_spike"
+    HYPOTENSION   = "hypotension"
     RESP_DISTRESS = "respiratory_distress"
+    VTACH         = "ventricular_tachycardia"
+    ISCHEMIA      = "myocardial_ischemia"
+    STEMI         = "stemi"
+    HEART_FAILURE = "heart_failure"
+    SEPSIS        = "sepsis"
     VFIB          = "ventricular_fibrillation"
 
 
@@ -65,23 +73,39 @@ class Episode:
 #  Each entry: (state, min_duration_s, max_duration_s, weight, severity)
 EPISODE_TYPES = [
     (PatientState.PVC,           30,   120, 3.0, "mild"),
+    (PatientState.PAC,           30,   120, 2.5, "mild"),
     (PatientState.TACHYCARDIA,   60,   300, 2.0, "mild"),
     (PatientState.BRADYCARDIA,   45,   240, 1.5, "moderate"),
     (PatientState.AFIB,          90,   360, 1.0, "moderate"),
+    (PatientState.AFLUTTER,      90,   360, 1.0, "moderate"),
     (PatientState.DESATURATION,  30,   180, 2.5, "mild"),
     (PatientState.HYPERTENSIVE,  60,   300, 1.5, "moderate"),
+    (PatientState.HYPOTENSION,   60,   240, 1.5, "moderate"),
     (PatientState.RESP_DISTRESS, 60,   240, 1.0, "mild"),
+    (PatientState.VTACH,         30,   120, 0.8, "severe"),
+    (PatientState.ISCHEMIA,      60,   240, 1.5, "moderate"),
+    (PatientState.STEMI,         60,   300, 0.8, "severe"),
+    (PatientState.HEART_FAILURE, 120,  480, 1.0, "moderate"),
+    (PatientState.SEPSIS,        180,  600, 0.8, "severe"),
     (PatientState.VFIB,          30,    90, 0.5, "severe"),
 ]
 
 EPISODE_LABELS = {
     PatientState.PVC:           "Premature Ventricular Contractions",
+    PatientState.PAC:           "Premature Atrial Contractions",
     PatientState.TACHYCARDIA:   "Sinus Tachycardia",
     PatientState.BRADYCARDIA:   "Sinus Bradycardia",
     PatientState.AFIB:          "Atrial Fibrillation",
+    PatientState.AFLUTTER:      "Atrial Flutter",
     PatientState.DESATURATION:  "SpO₂ Desaturation",
     PatientState.HYPERTENSIVE:  "Hypertensive Spike",
+    PatientState.HYPOTENSION:   "Hypotensive Crisis",
     PatientState.RESP_DISTRESS: "Respiratory Distress",
+    PatientState.VTACH:         "Ventricular Tachycardia",
+    PatientState.ISCHEMIA:      "Myocardial Ischemia",
+    PatientState.STEMI:         "STEMI Heart Attack",
+    PatientState.HEART_FAILURE: "Acute Heart Failure",
+    PatientState.SEPSIS:        "Septic Shock",
     PatientState.VFIB:          "Ventricular Fibrillation",
 }
 
@@ -174,8 +198,7 @@ class ArrhythmiaStateMachine:
 
         return PatientState.STABLE, None, 0.0
 
-    def get_vital_modifiers(self, state: PatientState, ramp: float
-                            ) -> dict:
+    def get_vital_modifiers(self, state: PatientState, ramp: float) -> dict:
         """
         Returns delta modifiers for each vital sign given the current state.
         Values are scaled by ramp_factor (smooth onset/offset).
@@ -186,8 +209,14 @@ class ArrhythmiaStateMachine:
             "dbp_delta":  0.0,
             "spo2_delta": 0.0,
             "rr_delta":   0.0,
-            "irregularity": 0.0,   # 0=regular, 1=fully irregular (AFib)
-            "pvc_burden": 0.0,     # fraction of beats that are PVCs
+            "temp_core_delta": 0.0,
+            "temp_skin_delta": 0.0,
+            "irregularity": 0.0,      # 0=regular, 1=fully irregular (AFib)
+            "pvc_burden": 0.0,        # fraction of beats that are PVCs
+            "pac_burden": 0.0,        # fraction of beats that are PACs
+            "st_delta": 0.0,          # baseline ST segment delta
+            "ppg_amplitude_factor": 1.0,  # multiplier for pulse wave size
+            "ie_ratio_factor": 1.0,   # multiplier for I:E breathing ratio
         }
 
         mods = {
@@ -197,29 +226,44 @@ class ArrhythmiaStateMachine:
                 "sbp_delta": -6.0,
                 "dbp_delta": -3.0,
                 "spo2_delta": -0.8,
-                "pvc_burden": 0.18,   # ~18% of beats are PVCs
+                "pvc_burden": 0.20,   # ~20% of beats are PVCs
+            },
+            PatientState.PAC: {
+                "hr_delta": -2.0,
+                "sbp_delta": -3.0,
+                "dbp_delta": -1.5,
+                "spo2_delta": -0.3,
+                "pac_burden": 0.18,   # ~18% of beats are PACs
             },
             PatientState.TACHYCARDIA: {
-                "hr_delta":   +32.0,
-                "sbp_delta":  +12.0,
-                "dbp_delta":  +8.0,
-                "spo2_delta": -1.5,
-                "rr_delta":   +3.0,
+                "hr_delta":   +40.0,
+                "sbp_delta":  +8.0,
+                "dbp_delta":  +5.0,
+                "spo2_delta": -1.0,
+                "rr_delta":   +4.0,
             },
             PatientState.BRADYCARDIA: {
                 "hr_delta":   -25.0,
-                "sbp_delta":  -14.0,
-                "dbp_delta":  -8.0,
-                "spo2_delta": -2.5,
-                "rr_delta":   -2.0,
+                "sbp_delta":  -10.0,
+                "dbp_delta":  -6.0,
+                "spo2_delta": 0.0,
+                "rr_delta":   0.0,
             },
             PatientState.AFIB: {
-                "hr_delta":   +28.0,
+                "hr_delta":   +30.0,
                 "sbp_delta":  -8.0,
                 "dbp_delta":  -5.0,
-                "spo2_delta": -3.0,
+                "spo2_delta": -2.0,
                 "rr_delta":   +2.0,
                 "irregularity": 1.0,
+            },
+            PatientState.AFLUTTER: {
+                "hr_delta":   +35.0,
+                "sbp_delta":  -6.0,
+                "dbp_delta":  -4.0,
+                "spo2_delta": -1.5,
+                "rr_delta":   +2.0,
+                "irregularity": 0.5,  # moderate rhythm drift
             },
             PatientState.DESATURATION: {
                 "hr_delta":   +8.0,
@@ -229,18 +273,64 @@ class ArrhythmiaStateMachine:
                 "rr_delta":   +4.0,
             },
             PatientState.HYPERTENSIVE: {
-                "hr_delta":   +12.0,
-                "sbp_delta":  +32.0,
-                "dbp_delta":  +18.0,
-                "spo2_delta": -0.5,
-                "rr_delta":   +1.5,
+                "hr_delta":   +5.0,
+                "sbp_delta":  +35.0,
+                "dbp_delta":  +20.0,
+            },
+            PatientState.HYPOTENSION: {
+                "hr_delta":   +18.0,
+                "sbp_delta":  -30.0,
+                "dbp_delta":  -18.0,
+                "rr_delta":   +2.0,
             },
             PatientState.RESP_DISTRESS: {
-                "hr_delta":   +10.0,
-                "sbp_delta":  +6.0,
+                "hr_delta":   +15.0,
+                "sbp_delta":  +8.0,
                 "dbp_delta":  +4.0,
+                "spo2_delta": -6.0,
+                "rr_delta":   +12.0,
+                "ie_ratio_factor": 0.5, # prolonged expiration
+            },
+            PatientState.VTACH: {
+                "hr_delta":   +75.0,
+                "sbp_delta":  -35.0,
+                "dbp_delta":  -22.0,
+                "spo2_delta": -8.0,
+                "rr_delta":   +6.0,
+            },
+            PatientState.ISCHEMIA: {
+                "hr_delta":   +15.0,
+                "sbp_delta":  -12.0,
+                "dbp_delta":  -8.0,
+                "spo2_delta": -2.0,
+                "rr_delta":   +4.0,
+                "st_delta":   -0.15,  # ST segment depression
+            },
+            PatientState.STEMI: {
+                "hr_delta":   +20.0,
+                "sbp_delta":  -20.0,
+                "dbp_delta":  -12.0,
                 "spo2_delta": -4.0,
                 "rr_delta":   +6.0,
+                "st_delta":   +0.25,  # ST segment elevation
+                "temp_core_delta": +0.6,
+            },
+            PatientState.HEART_FAILURE: {
+                "hr_delta":   +18.0,
+                "sbp_delta":  -15.0,
+                "dbp_delta":  -10.0,
+                "spo2_delta": -5.0,
+                "rr_delta":   +8.0,
+                "ppg_amplitude_factor": 0.6,
+            },
+            PatientState.SEPSIS: {
+                "hr_delta":   +30.0,
+                "sbp_delta":  -22.0,
+                "dbp_delta":  -14.0,
+                "spo2_delta": -4.0,
+                "rr_delta":   +8.0,
+                "temp_core_delta": +2.2,  # high fever
+                "temp_skin_delta": -1.5,  # cool periphery shock
             },
             PatientState.VFIB: {
                 "hr_delta":   +110.0,
@@ -253,7 +343,11 @@ class ArrhythmiaStateMachine:
 
         chosen = mods.get(state, {})
         for key, val in chosen.items():
-            base[key] = val * ramp
+            if key == "ppg_amplitude_factor" or key == "ie_ratio_factor":
+                # Interpolate factor from 1.0 to chosen factor based on ramp
+                base[key] = 1.0 + (val - 1.0) * ramp
+            else:
+                base[key] = val * ramp
 
         return base
 
