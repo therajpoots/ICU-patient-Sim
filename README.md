@@ -1,482 +1,228 @@
-# ICU Biosignal Simulator
+# HealthFi: Explainable AI Bedside Telemetry Monitor & Patient Simulator
 
-A realistic, real-time ICU patient biosignal simulator exposed via a secure REST API (TLS + AES-256-GCM encryption). Designed as a **data source** for your own ICU monitoring system.
+HealthFi is an end-to-end explainable AI clinical early warning system and bedside telemetry monitor. It simulates a **physiological twin** of an ICU patient (generating continuous ECG, PPG, and respiration waveforms), processes signals in real time to extract **39+ tabular features**, runs a pre-trained machine learning model to evaluate anomaly probability (early warning score), computes **SHAP explanations** to identify clinical drivers, and logs events securely in an AES-encrypted local database.
 
----
-
-## What It Simulates
-
-The simulator generates continuous, physiologically realistic signals for a single ICU patient:
-
-| Signal | Type | Rate | Notes |
-|--------|------|------|-------|
-| **ECG** | Waveform | 250 Hz | Single lead (Lead-II equivalent), Projected 3D VCG model |
-| **PPG** | Waveform | 250 Hz | Photoplethysmogram |
-| **Respiratory** | Waveform | 250 Hz | Chest/airflow signal |
-| **Heart Rate** | Derived | 1 Hz | Extracted from ECG R-peaks |
-| **SpO₂** | Derived | 1 Hz | Correlated with respiratory rate |
-| **Blood Pressure** | Derived | 1 Hz | Systolic / Diastolic / MAP |
-| **Respiratory Rate** | Derived | 1 Hz | Breaths per minute |
-
-### Realistic Signal Characteristics
-
-Every signal includes ICU-grade realism:
-
-- ✅ **Baseline wander** — slow sinusoidal drift (0.05–0.3 Hz)
-- ✅ **Gaussian white noise** — continuous low-level noise floor
-- ✅ **50 Hz powerline interference** — subtle mains noise
-- ✅ **Motion artifacts** — sporadic bursts (simulating patient movement)
-- ✅ **Ornstein–Uhlenbeck random walk** — vitals drift naturally around baseline (not flat)
-- ✅ **Physiological coupling** — SpO₂ drops when RR rises; BP follows HR changes
-
-### Arrhythmia / Deterioration Episodes
-
-Every **2–4 hours** (Poisson-distributed), the patient randomly enters one of these states:
-
-| Episode | HR Effect | BP Effect | SpO₂ Effect | Duration |
-|---------|-----------|-----------|-------------|---------|
-| **PVCs** | −3 bpm | −6 mmHg | −1% | 30s–2min |
-| **Sinus Tachycardia** | +32 bpm | +12 mmHg | −2% | 1–5min |
-| **Sinus Bradycardia** | −25 bpm | −14 mmHg | −3% | 45s–4min |
-| **Atrial Fibrillation** | +28 bpm, irregular | −8 mmHg | −3% | 1.5–6min |
-| **SpO₂ Desaturation** | +8 bpm | +5 mmHg | −6% | 30s–3min |
-| **Hypertensive Spike** | +12 bpm | +32 mmHg | −0.5% | 1–5min |
-| **Respiratory Distress** | +10 bpm | +6 mmHg | −4% | 1–4min |
-
-All transitions are **smooth** (12-second ramp in/out) — no abrupt jumps.
+The system features a premium, glassmorphic dark-neon **PyQt6 Bedside Monitor Dashboard** for real-time visualization, threshold setups, emergency nurse calls, and PDF shift report compilation.
 
 ---
 
-## Quick Start
+## System Architecture
 
-### 1. Install Dependencies
+```mermaid
+graph TD
+    subgraph Patient Simulator (BioSim Engine)
+        A["arrhythmia_states.py: ArrhythmiaStateMachine"] -->|"Update State & Mods"| B["vitals.py: VitalsEngine"]
+        B -->|"Compute Random Walks & State Deltas"| C["Vitals: SBP, DBP, MAP, SpO2, HR, RR, Core/Skin Temp"]
+        B -->|"Generate Continuous Waveforms"| D["Waveforms: ECG, PPG, RSP"]
+    end
 
+    subgraph Feature Engineering Layer (features.py)
+        C & D -->|"Window Analysis"| E["Extract 39+ Tabular Features"]
+        E -->|"Output Feature Vector"| F["Tabular Feature Dataset"]
+    end
+
+    subgraph Anomaly Detection & Explainability AI (ml/)
+        F -->|"Input Vector"| G["CatBoost / RF Classifier"]
+        G -->|"Calculate Probability"| H["Anomaly Score (0-100)"]
+        G -->|"Evaluate Decision Path"| I["Anomaly Severity (Normal/Mild/Mod/Severe)"]
+        F & G -->|"Explain Predictions"| J["SHAP Tree Explainer"]
+        J -->|"Identify Top Drivers"| K["Contributing Physiological Features"]
+    end
+
+    subgraph Clinical Surveillance Engine (gui/worker.py)
+        H & I & K -->|"Real-time Telemetry"| L["PyQt6 Monitor Client Dashboard"]
+        H & I & K -->|"Transition Event Log"| M["Encrypted Database: SQLite + AES-GCM"]
+    end
+
+    subgraph Report Generator (gui/pdf_generator.py)
+        M -->|"Retrieve Logs & Waveforms"| N["Compile Shift Report PDF"]
+        N -->|"Output clinical report"| O["Physician Case Report"]
+    end
+```
+
+---
+
+## Step-by-Step Installation Guide
+
+Follow these steps to set up the program after downloading or cloning from GitHub:
+
+### 1. Prerequisites
+Ensure you have **Python 3.10 or higher** installed on your system. You can check your version by running:
 ```bash
-cd "E:\ICU pipeline"
+python --version
+```
+
+### 2. Download and Extract the Repository
+If you downloaded the code as a ZIP file from GitHub, extract it to a folder of your choice (e.g., `E:\ICU pipeline`).
+
+If you are cloning via Git:
+```bash
+git clone https://github.com/your-organization/icu-pipeline.git
+cd icu-pipeline
+```
+
+### 3. Set Up a Virtual Environment (Recommended)
+Creating a virtual environment ensures Python packages don't interfere with your global Python installation:
+
+* **Windows (PowerShell)**:
+  ```powershell
+  python -m venv .venv
+  .venv\Scripts\Activate.ps1
+  ```
+* **macOS / Linux**:
+  ```bash
+  python3 -m venv .venv
+  source .venv/bin/activate
+  ```
+
+### 4. Install Dependencies
+Install all required clinical libraries, GUI packages, and ML libraries:
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment
+### 5. Configure the Environment Settings (`.env`)
+The simulator and encrypted database require a set of secrets and patient metrics. 
 
-```bash
-copy .env.example .env
-```
-
-Edit `.env` and set:
-```env
-AES_SHARED_SECRET=your-very-long-random-secret-here
-API_KEY=your-api-key-here
-PATIENT_NAME=John Doe
-PATIENT_ID=ICU-2026-001
-PATIENT_WARD=NICU-3B
-```
-
-### 3. Start the Simulator
-
-**Option A: HTTPS (recommended for production)**
-```bash
-python run_simulator.py
-```
-> TLS certificates are auto-generated on first run in `certs/`
-
-**Option B: HTTP (for local dev/testing)**
-```bash
-python run_simulator.py --http
-```
-
-### 4. Verify It's Working
-
-```bash
-# Health check (no auth needed)
-curl -k https://localhost:8443/api/v1/health
-
-# Or with HTTP mode:
-curl http://localhost:8080/api/v1/health
-```
+1. Duplicate the `.env.example` file and rename it to `.env`:
+   ```bash
+   # Windows
+   copy .env.example .env
+   
+   # macOS / Linux
+   cp .env.example .env
+   ```
+2. Open `.env` in any text editor and fill out the values:
+   ```env
+   # Shared secret used to derive the AES-256 key for payload encryption
+   AES_SHARED_SECRET=your-32+character-random-key-here
+   
+   # API authentication token
+   API_KEY=your-secure-telemetry-api-key
+   
+   # Default Patient profile loaded on start
+   PATIENT_NAME=John Doe
+   PATIENT_ID=PT-2026-9041
+   PATIENT_AGE=65
+   PATIENT_WARD=ICU Ward A
+   
+   # Model parameters
+   ARRHYTHMIA_MEAN_INTERVAL_S=9000
+   SIM_SPEED=1.0
+   ```
 
 ---
 
-## API Reference
+## Step-by-Step Guide to Run the Program
 
-### Authentication
+HealthFi supports two primary topologies: **Local Simulation** (all-in-one PyQt app) and **Remote Surveillance** (FastAPI backend + separate PyQt clients).
 
-All `/api/v1/vitals/*` and `/api/v1/signals/*` endpoints require:
-```
-X-API-Key: <your-api-key-from-.env>
-```
+### Option A: Running the All-in-One Application (easiest)
+This launches the PyQt6 desktop monitor which directly simulates patient telemetry in the background.
 
-Public endpoints (no auth): `/api/v1/health`, `/api/v1/patient`, `/docs`
-
-### Encryption
-
-All authenticated endpoint responses are **double-encrypted**:
-1. **TLS** — transport layer (HTTPS)
-2. **AES-256-GCM** — application layer (payload)
-
-Every response looks like:
-```json
-{
-  "encrypted": true,
-  "algorithm": "AES-256-GCM",
-  "payload": "<base64-encoded: nonce(12) + ciphertext + tag(16)>"
-}
-```
-
-**Decrypting in Python:**
-```python
-import base64, json, os
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.backends import default_backend
-
-# Key derivation (same as server)
-def derive_key(secret: str) -> bytes:
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(), length=32,
-        salt=b"icu-biosignal-pipeline-v1-salt-2026",
-        iterations=260_000, backend=default_backend()
-    )
-    return kdf.derive(secret.encode())
-
-key = derive_key(os.environ["AES_SHARED_SECRET"])
-
-def decrypt(payload_b64: str):
-    combined = base64.b64decode(payload_b64)
-    nonce, ciphertext = combined[:12], combined[12:]
-    plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)
-    return json.loads(plaintext)
-```
-
-**Or use the included client helper:**
-```python
-from client_example.decrypt_client import ICUClient
-
-with ICUClient() as client:
-    vitals = client.get_vitals()
-    print(vitals["heart_rate"])  # e.g. 74.3
-```
+1. **Launch the Desktop Client**:
+   ```bash
+   python run_desktop.py
+   ```
+2. **Configure the Connection Page (Connection Setup)**:
+   - **Telemetry Source Mode**: Select `Simulate Patient (Local)` or `Demo Mode (10-Min / 6 Anomalies)`.
+   - **Clinician Security Access Key**: Enter a password (e.g., `clinical123`). This password is used via **PBKDF2-HMAC-SHA256** to derive an AES key that secures/encrypts local patient telemetry databases.
+   - **Enable Local MCP Server**: Keep checked to enable Model Context Protocol interactions.
+   - Click **Start Clinical Monitoring**.
+3. **Telemetry UI Controls**:
+   - Switch between **📡 Live Monitor** (showing rolling ECG, PPG, RSP plots, vitals cards, and live anomaly logs) and **📊 Tabular Features** (showing 39+ features with baseline ranges, live drifts, and SHAP weight gauges).
+   - **Setup Dialog (⚙️ Setup)**: Click this on the sidebar to adjust upper/lower clinical alarm thresholds and customize the patient name, ID, ward, unit, bed, and age.
+   - **Emergency Call Button (⚠ Emergency Call)**: Click to trigger an immediate nurse call distress signal, log the incident into the local database, and flash the alarm banner for 15 seconds.
+   - **Reports Dialog (📋 Reports)**: Generate a shift report. Select the time window and compile a PDF report containing 3-channel waveform charts, vitals progression, and XAI diagnosis explanations.
 
 ---
 
-### Endpoints
+### Option B: Running in Client-Server REST Mode (Distributed)
+In this mode, the patient twin simulator runs on a central server, exposing encrypted telemetry endpoints, while monitor clients query it over the network.
 
-#### `GET /api/v1/health`
-**No auth required.** Server status check.
+#### Step 1: Start the REST API Simulator Server
+Launch the backend server using the FastAPI configuration:
 
-```json
-{
-  "status": "ok",
-  "patient_id": "ICU-2026-001",
-  "session_duration_s": 3600.0,
-  "next_arrhythmia_episode_in_s": 5423,
-  "transport_security": "TLS 1.3",
-  "payload_encryption": "AES-256-GCM"
-}
-```
+* **Production (HTTPS - Auto-generates self-signed certificates)**:
+  ```bash
+  python run_simulator.py
+  ```
+* **Development (HTTP - local testing)**:
+  ```bash
+  python run_simulator.py --http
+  ```
+Verify the server is running by opening the FastAPI documentation in your browser:
+- Swagger Docs: http://localhost:8080/docs (HTTP) or https://localhost:8443/docs (HTTPS)
 
----
-
-#### `GET /api/v1/patient`
-**No auth required.** Patient profile metadata.
-
-```json
-{
-  "patient_id": "ICU-2026-001",
-  "patient_name": "John Doe",
-  "ward": "NICU-3B",
-  "signals": ["ECG (Lead-II equivalent)", "PPG", "Respiratory"],
-  "derived_vitals": ["Heart Rate (bpm)", "SpO₂ (%)", "Systolic BP (mmHg)", ...]
-}
-```
+#### Step 2: Launch the GUI Monitor Client
+1. Launch the desktop GUI on any terminal in the network:
+   ```bash
+   python run_desktop.py
+   ```
+2. On the Connection Page:
+   - **Telemetry Source Mode**: Select `Remote Patient Monitor (REST SSE)`.
+   - **Remote Host IP & Port**: Enter the IP address and port (e.g., `127.0.0.1` and `8080`).
+   - **DeepSeek API Key**: Provide an API key for clinical summary compilation.
+   - **Clinician Security Access Key**: Enter the database encryption password.
+   - Click **Test Telemetry Stream** to verify connectivity, then click **Start Clinical Monitoring**.
 
 ---
 
-#### `GET /api/v1/vitals/current`
-**Auth required.** Latest 1-second vital snapshot. **Encrypted.**
+## Machine Learning & AI Explainability Pipeline
 
-*Decrypted payload:*
-```json
-{
-  "heart_rate": 74.3,
-  "systolic_bp": 126.1,
-  "diastolic_bp": 81.4,
-  "map": 96.3,
-  "spo2": 97.2,
-  "respiratory_rate": 15.8,
-  "patient_state": "stable",
-  "episode_label": null,
-  "episode_severity": null,
-  "episode_ramp": 0.0,
-  "pvc_burden": 0.0,
-  "irregularity": 0.0,
-  "timestamp": 1750000000.0
-}
-```
+To retrain the clinical surveillance models or test signal feature analysis offline:
 
-**Patient states:** `stable`, `pvc`, `sinus_tachycardia`, `sinus_bradycardia`, `atrial_fibrillation`, `spo2_desaturation`, `hypertensive_spike`, `respiratory_distress`
-
----
-
-#### `GET /api/v1/vitals/episode`
-**Auth required.** Current arrhythmia episode status. **Encrypted.**
-
-*Decrypted payload:*
-```json
-{
-  "episode_active": true,
-  "state": "atrial_fibrillation",
-  "episode_label": "Atrial Fibrillation",
-  "severity": "moderate",
-  "ramp_factor": 0.87,
-  "pvc_burden": 0.0,
-  "irregularity": 0.87,
-  "next_episode_in_s": 0,
-  "episodes_history_count": 3,
-  "timestamp": 1750000000.0
-}
-```
-
-> Poll this endpoint in your monitoring system to detect deterioration events.
-
----
-
-#### `GET /api/v1/vitals/stream`
-**Auth required.** Server-Sent Events — 1 update per second. **Each event encrypted.**
-
-```bash
-# With curl (self-signed cert — skip verification):
-curl -N -k -H "X-API-Key: your-key" https://localhost:8443/api/v1/vitals/stream
-
-# With HTTP mode:
-curl -N -H "X-API-Key: your-key" http://localhost:8080/api/v1/vitals/stream
-```
-
-SSE event format:
-```
-event: vitals
-data: {"encrypted":true,"algorithm":"AES-256-GCM","payload":"<base64>"}
-```
-
----
-
-#### `GET /api/v1/vitals/history?seconds=3600`
-**Auth required.** In-memory vital history (up to 13 hours). **Encrypted.**
-
-Useful to backfill your monitoring system on reconnect.
-
-| Parameter | Default | Max | Description |
-|-----------|---------|-----|-------------|
-| `seconds` | 3600 | 46800 | How many seconds of history to return |
-
----
-
-#### `GET /api/v1/signals/ecg?seconds=10`
-**Auth required.** ECG waveform samples. **Encrypted.**
-
-*Decrypted payload:*
-```json
-{
-  "signal": "ecg",
-  "sampling_rate_hz": 250,
-  "duration_s": 10,
-  "n_samples": 2500,
-  "lead": "Lead-II equivalent",
-  "samples": [0.0123, -0.0045, 0.0891, ...]
-}
-```
-
-| Parameter | Default | Max |
-|-----------|---------|-----|
-| `seconds` | 10 | 30 |
-
----
-
-#### `GET /api/v1/signals/ppg?seconds=10`
-**Auth required.** PPG waveform. **Encrypted.** Same structure as ECG.
-
----
-
-#### `GET /api/v1/signals/rsp?seconds=10`
-**Auth required.** Respiratory waveform. **Encrypted.** Same structure as ECG.
-
----
-
-### Interactive API Docs
-
-When the server is running, visit:
-- **Swagger UI**: https://localhost:8443/docs
-- **ReDoc**: https://localhost:8443/redoc
-
----
-
-## Configuration Reference (`.env`)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AES_SHARED_SECRET` | *(required)* | Shared secret for AES-256 key derivation |
-| `API_KEY` | `icu-monitor-dev-key-...` | API key for X-API-Key header |
-| `HOST` | `0.0.0.0` | Bind address |
-| `PORT` | `8443` | HTTPS port |
-| `USE_TLS` | `true` | Enable/disable TLS |
-| `PATIENT_ID` | `ICU-2026-001` | Patient identifier |
-| `PATIENT_NAME` | `John Doe` | Patient name |
-| `PATIENT_AGE` | `67` | Patient age |
-| `PATIENT_WARD` | `NICU-3B` | Ward identifier |
-| `SAMPLING_RATE` | `250` | Hz for all waveforms |
-| `WAVEFORM_BUFFER_SECONDS` | `30` | Rolling waveform buffer size |
-| `SIM_SPEED` | `1.0` | 1.0 = real-time, 2.0 = 2× speed |
-| `ARRHYTHMIA_MEAN_INTERVAL_S` | `9000` | Mean seconds between episodes (~2.5 hrs) |
-
----
-
-## Using the Client Helper
-
-The `client_example/decrypt_client.py` provides a ready-made client:
-
-```python
-from client_example.decrypt_client import ICUClient
-
-with ICUClient(
-    base_url="https://localhost:8443",
-    api_key="your-api-key",
-    verify_ssl=False,   # False for self-signed certs
-) as client:
-
-    # Health check
-    h = client.health_check()
-    print(h["status"])
-
-    # Current vitals (auto-decrypted)
-    v = client.get_vitals()
-    print(f"HR: {v['heart_rate']} bpm | SpO2: {v['spo2']}%")
-
-    # Episode status
-    ep = client.get_episode_status()
-    if ep["episode_active"]:
-        print(f"ALERT: {ep['episode_label']} ({ep['severity']})")
-
-    # ECG waveform (10 seconds = 2500 samples)
-    ecg = client.get_ecg(seconds=10)
-    samples = ecg["samples"]
-
-    # PPG
-    ppg = client.get_ppg(seconds=5)
-
-    # Respiratory
-    rsp = client.get_rsp(seconds=5)
-
-    # History (last 1 hour of vitals)
-    hist = client.get_history(seconds=3600)
-    for record in hist["vitals"]:
-        print(record["heart_rate"], record["spo2"])
-```
-
----
-
-## Testing the System
-
-```bash
-python -m client_example.test_system
-```
-
-Runs connectivity, auth, encryption validation, waveform, and data quality tests.
-
-For a **live terminal monitor** (shows real-time vitals while running):
-```bash
-python -m client_example.test_system --monitor --monitor-time 60
-```
+1. **Train Model Cohort**:
+   ```bash
+   python ml/train_model.py
+   ```
+   This simulates physiological twin cohorts, extracts tabular features, trains five classifiers (Random Forest, XGBoost, LightGBM, CatBoost, Logistic Regression), plots comparative metrics (ROC-AUC curves, Feature Importance, Decision Paths), and saves the model objects (`trained_gbm.pkl` and `shap_explainer.pkl`).
+2. **Verify Anomaly Detection**:
+   ```bash
+   python -u ml/verify_anomaly.py
+   ```
+   Validates model predictions and prints the top 3 physiological drivers identified by SHAP tree explainers.
 
 ---
 
 ## Project Structure
 
 ```
-E:\ICU pipeline\
-├── run_simulator.py          # ← Start here
-├── setup_tls.py              # TLS cert generator (auto-called by runner)
-├── requirements.txt
-├── .env.example              # Copy to .env and configure
+├── run_desktop.py            # PyQt6 Bedside Telemetry Monitor Entry point
+├── run_simulator.py          # FastAPI Backend Twin Simulator Entry point
+├── requirements.txt          # Python dependency list
+├── .env.example              # Configuration template
 │
-├── simulator/                # Core signal generation
-│   ├── engine.py             # Main loop, waveform buffers, threading
-│   ├── vitals.py             # ECG/PPG/RSP generation + noise layers
-│   ├── arrhythmia_states.py  # Episode state machine (Poisson-timed)
-│   └── patient_profile.py    # Patient baseline configuration
+├── gui/                      # Client UI Layer
+│   ├── app.py                # Main window layout and route coordination
+│   ├── connection_page.py    # Glassmorphic setup login dialog
+│   ├── monitor_page.py       # Live telemetry, Setup thresholds config, emergency calling
+│   ├── features_page.py      # Tabular features, drift status, SHAP influence bars
+│   ├── report_dialog.py      # PDF Report compiler setup modal
+│   ├── pdf_generator.py      # Generates PDF report with charts & XAI summaries
+│   ├── worker.py             # Background thread polling REST SSE & running ML
+│   └── database.py           # Local encrypted SQLite event logger
 │
-├── api/                      # REST API layer
-│   ├── main.py               # FastAPI app + startup
-│   ├── crypto.py             # AES-256-GCM encrypt/decrypt
-│   ├── dependencies.py       # API key auth
-│   └── routes/
-│       ├── vitals.py         # /vitals/current, /stream, /history, /episode
-│       └── signals.py        # /signals/ecg, /ppg, /rsp
+├── simulator/                # Patient Physiological Twin Engine
+│   ├── engine.py             # Main loop coordinating waveform buffers
+│   ├── vitals.py             # Pre-filtered ECG, PPG, RSP waveform synthesis
+│   ├── arrhythmia_states.py  # 15-state physiological twin state machine
+│   └── patient_profile.py    # Default baselines and environments
 │
-├── client_example/
-│   ├── decrypt_client.py     # Python API client with auto-decryption
-│   └── test_system.py        # Comprehensive test suite
+├── ml/                       # Machine Learning & AI Explainability
+│   ├── train_model.py        # Model cohort trainer & performance comparison
+│   ├── explainability.py     # SHAP tree explanation utilities
+│   └── verify_anomaly.py     # Offline ML performance evaluation
 │
-└── certs/                    # Auto-generated TLS certs (gitignore this)
+└── client_example/           # Dev telemetry utilities
+    ├── decrypt_client.py     # AES-256-GCM decrypting REST client helper
+    └── test_system.py        # End-to-end integration test runner
 ```
 
 ---
 
-## Integration Guide for Your Monitoring System
+## Troubleshooting
 
-### Connecting to the Simulator
-
-Your monitoring system should:
-
-1. **Read config** — load `AES_SHARED_SECRET` and `API_KEY` from your secure config store
-2. **Derive AES key** — use PBKDF2-HMAC-SHA256 with the fixed salt (see crypto.py)
-3. **Connect via SSE** (`/api/v1/vitals/stream`) for real-time 1-second vital updates
-4. **Fetch waveforms** on demand from `/api/v1/signals/ecg|ppg|rsp`
-5. **Poll episode status** from `/api/v1/vitals/episode` to detect deteriorations
-6. **Backfill history** on reconnect using `/api/v1/vitals/history`
-
-### Recommended Polling Strategy
-
-| Data | Endpoint | Frequency |
-|------|----------|-----------|
-| Live vitals | `/vitals/stream` (SSE) | Keep-alive connection |
-| Episode status | `/vitals/episode` | Every 5 seconds |
-| ECG waveform | `/signals/ecg?seconds=10` | Every 10 seconds |
-| PPG waveform | `/signals/ppg?seconds=10` | Every 10 seconds |
-| RSP waveform | `/signals/rsp?seconds=10` | Every 10 seconds |
-| History backfill | `/vitals/history` | On connect/reconnect |
-
-### Simulating for Testing
-
-To make episodes fire more frequently (for testing your monitoring logic):
-
-```env
-# .env — fire episodes every ~10 minutes instead of ~2.5 hours
-ARRHYTHMIA_MEAN_INTERVAL_S=600
-```
-
-To run at 2× real-time speed:
-```env
-SIM_SPEED=2.0
-```
-
----
-
-## Security Notes
-
-- **TLS certificates** in `certs/` are **self-signed** (valid 10 years). Clients must either trust the cert or use `verify=False` (only for testing).
-- The **AES shared secret** should be a random 32+ character string stored securely (e.g., in a secrets manager, not plain text in production).
-- **Rotate the API key** before any deployment by changing `API_KEY` in `.env`.
-- In production, put the simulator behind a proper reverse proxy (Nginx) with a CA-signed certificate.
-
----
-
-## Requirements
-
-- Python 3.10+
-- See `requirements.txt` for all dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-Key libraries: `biosignal-simulator`, `fastapi`, `uvicorn`, `cryptography`, `sse-starlette`, `numpy`, `scipy`
+- **Database Decryption Failure**: If you get warnings like `Skipping log ID due to decryption failure`, it means the database was written using a different Clinician Security Access Key password. Use the password that was active when those logs were created, or delete `data/anomaly_logs.db` to start a fresh archive.
+- **TLS Certificate Warnings**: In production/HTTPS mode, the server auto-generates self-signed certificates. If your custom clients fail to connect, ensure you disable SSL verification (e.g., `verify_ssl=False` in REST calls or python test scripts).
+- **PDF Export Freeze**: Ensure you have a valid DeepSeek API key configured in settings, or use the offline fallback mode by keeping the default `sk-...` dummy key in settings.
